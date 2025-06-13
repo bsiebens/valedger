@@ -8,6 +8,8 @@ class Currency(models.Model):
     name = models.CharField(_("name"), max_length=100)
     symbol = models.CharField(_("symbol"), max_length=10, blank=True)
 
+    is_base_currency = models.BooleanField(_("base currency"), default=False)
+
     def __str__(self):
         return self.code
 
@@ -15,17 +17,48 @@ class Currency(models.Model):
         verbose_name = _("currency")
         verbose_name_plural = _("currencies")
 
-    def convert(self, to_currency: str, amount: float | Decimal = Decimal("1.0")) -> Decimal:
+    def save(self, *args, **kwargs):
+        if not Currency.objects.exclude(pk=self.pk).filter(is_base_currency=True).exists():
+            # No other base currency exists, set this as base if not already
+            self.is_base_currency = True
+        elif self.is_base_currency:
+            # If this is being set as base, unset all others
+            Currency.objects.exclude(pk=self.pk).update(is_base_currency=False)
+
+        super().save(*args, **kwargs)
+
+    def convert(self, to_currency: "str | Currency", amount: float | Decimal = Decimal("1.0")) -> Decimal:
         """Converts to a given currency, optionally specifiying an amount to convert. Returns the amount if no rate exists."""
 
         amount = Decimal(amount)
 
-        try:
-            conversion_rate = self.conversionrates_from.filter(to_currency__code=to_currency).latest()
-            return amount * conversion_rate.factor
+        if not isinstance(to_currency, Currency):
+            to_currency = Currency.objects.get(code=to_currency)
 
-        except ConversionRate.DoesNotExist:
+        if to_currency == self:
             return amount
+
+        if self.is_base_currency or to_currency.is_base_currency:
+            try:
+                conversion_rate = self.conversionrates_from.filter(to_currency=to_currency).latest()
+                return amount * conversion_rate.factor
+
+            except ConversionRate.DoesNotExist:
+                return amount
+
+        else:
+            base_currency = Currency.objects.get(is_base_currency=True)
+
+            try:
+                currency_to_base_currency_conversion = self.conversionrates_from.filter(to_currency=base_currency).latest()
+                base_currency_to_to_currency_conversion = base_currency.conversionrates_from.filter(to_currency=to_currency).latest()
+
+                return amount * currency_to_base_currency_conversion.factor * base_currency_to_to_currency_conversion.factor
+
+            except ConversionRate.DoesNotExist:
+                return amount
+
+    def download_historical_rates(self): ...
 
 
 class ConversionRate(models.Model):
@@ -43,4 +76,3 @@ class ConversionRate(models.Model):
         verbose_name_plural = _("conversion rates")
         get_latest_by = "date"
         ordering = ["-date"]
-        unique_together = ["from_currency", "to_currency", "date"]  # Only allow 1 rate per day
