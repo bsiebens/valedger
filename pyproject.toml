@@ -5,6 +5,7 @@ description = "Yet another personal finance manager"
 authors = ["Bernard Siebens <bernard@siebens.org>"]
 license = "MIT"
 readme = "README.md"
+package-mode = false
 
 [tool.poetry.dependencies]
 python = "^3.12"
