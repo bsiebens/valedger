@@ -3,31 +3,22 @@ from django.db import models
 from django.utils.translation import gettext_lazy as _
 
 
-def convert(from_currency: str, to_currency: str, amount: float = 1) -> Decimal:
-    """Converts an amount from one currency to another, optionally specifying an amount to convert. Returns the amount if no rate exists."""
-
-    try:
-        conversion_rate = ConversionRate.objects.filter(from_currency__code=from_currency, to_currency__code=to_currency).latest()
-        return amount * conversion_rate.factor
-
-    except ConversionRate.DoesNotExist:
-        return amount
-
-
 class Currency(models.Model):
     code = models.CharField(_("code"), max_length=3, unique=True)
     name = models.CharField(_("name"), max_length=100)
     symbol = models.CharField(_("symbol"), max_length=10, blank=True)
 
+    def __str__(self):
+        return self.code
+
     class Meta:
         verbose_name = _("currency")
         verbose_name_plural = _("currencies")
 
-    def __str__(self):
-        return self.code
-
-    def convert_to(self, to_currency: str, amount: float = 1) -> Decimal:
+    def convert(self, to_currency: str, amount: float | Decimal = Decimal("1.0")) -> Decimal:
         """Converts to a given currency, optionally specifiying an amount to convert. Returns the amount if no rate exists."""
+
+        amount = Decimal(amount)
 
         try:
             conversion_rate = self.conversionrates_from.filter(to_currency__code=to_currency).latest()
@@ -44,11 +35,12 @@ class ConversionRate(models.Model):
     factor = models.DecimalField(_("factor"), max_digits=10, decimal_places=4)
     date = models.DateField(_("date"))
 
+    def __str__(self):
+        return f"{self.from_currency.code}:{self.to_currency.code} {self.factor} ({self.date.isoformat()})"
+
     class Meta:
         verbose_name = _("conversion rate")
         verbose_name_plural = _("conversion rates")
         get_latest_by = "date"
         ordering = ["-date"]
-
-    def __str__(self):
-        return f"{self.from_currency.code}:{self.to_currency.code} {self.factor} ({self.date.isoformat()})"
+        unique_together = ["from_currency", "to_currency", "date"]  # Only allow 1 rate per day
