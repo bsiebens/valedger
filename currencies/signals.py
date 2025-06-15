@@ -2,10 +2,10 @@ from django.db.models.signals import post_save, post_delete
 from django.dispatch import receiver
 from decimal import Decimal
 
-from .models import ConversionRate
+from .models import ConversionFactor
 
 
-@receiver(post_save, sender=ConversionRate)
+""" @receiver(post_save, sender=ConversionRate)
 def create_or_update_reverse_conversion_rate(instance: ConversionRate, *args, **kwargs) -> None:
     if instance.factor == Decimal("0.0"):
         reverse_factor = Decimal("0.0")
@@ -25,4 +25,4 @@ def delete_reverse_conversion_rate(instance: ConversionRate, *args, **kwargs) ->
         ConversionRate.objects.get(from_currency=instance.to_currency, to_currency=instance.from_currency, date=instance.date).delete()
 
     except ConversionRate.DoesNotExist:
-        pass
+        pass """
