@@ -1,219 +1,154 @@
 from decimal import Decimal
+
 from django.test import TestCase
-from django.db.utils import IntegrityError
 from django.utils import timezone
 
-from .models import Currency, ConversionRate
+from .models import ConversionFactor, Currency
 
 
-class CurrencyModelTests(TestCase):
+class CurrencyModelTest(TestCase):
     def setUp(self):
-        # Base currency
         self.usd = Currency.objects.create(code="USD", name="US Dollar", symbol="$", is_base_currency=True)
-        # Other currencies
         self.eur = Currency.objects.create(code="EUR", name="Euro", symbol="€")
-        self.jpy = Currency.objects.create(code="JPY", name="Japanese Yen", symbol="¥")
-        self.gbp = Currency.objects.create(code="GBP", name="British Pound", symbol="£")
-        self.date = timezone.now().date()
+        self.gbp = Currency.objects.create(code="GBP", name="Pound Sterling", symbol="£")
 
-    def test_currency_str(self):
+    def test_str(self):
         self.assertEqual(str(self.usd), "USD")
+        self.assertEqual(str(self.eur), "EUR")
+        self.assertEqual(str(self.gbp), "GBP")
 
-    def test_convert_with_rate(self):
-        ConversionRate.objects.create(from_currency=self.usd, to_currency=self.eur, factor=Decimal("0.90"), date=timezone.now().date())
-        converted_amount = self.usd.convert(to_currency="EUR", amount=Decimal("100.00"))
-        self.assertEqual(converted_amount, Decimal("90.00"))
-
-    def test_convert_with_rate_default_amount(self):
-        ConversionRate.objects.create(from_currency=self.usd, to_currency=self.eur, factor=Decimal("0.90"), date=timezone.now().date())
-        converted_amount = self.usd.convert(to_currency="EUR")
-        self.assertEqual(converted_amount, Decimal("0.90"))
-
-    def test_convert_without_rate(self):
-        # No conversion rate exists from USD (base) to JPY
-        original_amount = Decimal("100.00")
-        converted_amount = self.usd.convert(to_currency="JPY", amount=original_amount)
-        self.assertEqual(converted_amount, original_amount)
-
-    def test_convert_uses_latest_rate(self):
-        today = timezone.now().date()
-        yesterday = today - timezone.timedelta(days=1)
-
-        ConversionRate.objects.create(from_currency=self.usd, to_currency=self.eur, factor=Decimal("0.85"), date=yesterday)
-        ConversionRate.objects.create(from_currency=self.usd, to_currency=self.eur, factor=Decimal("0.90"), date=today)  # This is the latest
-
-        converted_amount = self.usd.convert(to_currency="EUR", amount=Decimal("10.00"))
-        self.assertEqual(converted_amount, Decimal("9.00"))
-
-    def test_convert_to_currency_object(self):
-        ConversionRate.objects.create(from_currency=self.usd, to_currency=self.eur, factor=Decimal("0.90"), date=self.date)
-        converted_amount = self.usd.convert(to_currency=self.eur, amount=Decimal("100.00"))
-        self.assertEqual(converted_amount, Decimal("90.00"))
-
-    def test_convert_from_non_base_to_base(self):
-        ConversionRate.objects.create(from_currency=self.eur, to_currency=self.usd, factor=Decimal("1.10"), date=self.date)
-        converted_amount = self.eur.convert(to_currency=self.usd, amount=Decimal("100.00"))
-        self.assertEqual(converted_amount, Decimal("110.00"))
-
-    def test_convert_between_non_base_currencies_via_base(self):
-        ConversionRate.objects.create(from_currency=self.eur, to_currency=self.usd, factor=Decimal("1.10"), date=self.date)  # EUR -> USD
-        ConversionRate.objects.create(from_currency=self.usd, to_currency=self.jpy, factor=Decimal("130.00"), date=self.date)  # USD -> JPY
-
-        # EUR -> JPY via USD
-        # 100 EUR * 1.10 (EUR/USD) * 130.00 (JPY/USD) = 14300 JPY
-        converted_amount = self.eur.convert(to_currency=self.jpy, amount=Decimal("100.00"))
-        self.assertEqual(converted_amount, Decimal("14300.00"))
-
-    def test_convert_between_non_base_currencies_missing_first_leg_rate(self):
-        # EUR -> USD rate is missing
-        ConversionRate.objects.create(from_currency=self.usd, to_currency=self.jpy, factor=Decimal("130.00"), date=self.date)  # USD -> JPY
-        original_amount = Decimal("100.00")
-        converted_amount = self.eur.convert(to_currency=self.jpy, amount=original_amount)
-        self.assertEqual(converted_amount, original_amount)  # Should return original amount
-
-    def test_convert_between_non_base_currencies_missing_second_leg_rate(self):
-        ConversionRate.objects.create(from_currency=self.eur, to_currency=self.usd, factor=Decimal("1.10"), date=self.date)  # EUR -> USD
-        # USD -> JPY rate is missing
-        original_amount = Decimal("100.00")
-        converted_amount = self.eur.convert(to_currency=self.jpy, amount=original_amount)
-        self.assertEqual(converted_amount, original_amount)  # Should return original amount
-
-    def test_convert_to_same_currency_base(self):
-        original_amount = Decimal("50.00")
-        converted_amount = self.usd.convert(to_currency=self.usd, amount=original_amount)
-        self.assertEqual(converted_amount, original_amount)
-
-    def test_convert_to_same_currency_non_base(self):
-        ConversionRate.objects.create(from_currency=self.eur, to_currency=self.usd, factor=Decimal("1.10"), date=self.date)
-        ConversionRate.objects.create(from_currency=self.usd, to_currency=self.eur, factor=Decimal("1.0") / Decimal("1.10"), date=self.date)
-        original_amount = Decimal("50.00")
-        converted_amount = self.eur.convert(to_currency=self.eur, amount=original_amount)
-        # Expecting 50.00 * 1.10 * (1/1.10) which is 50.00
-        self.assertEqual(converted_amount.quantize(Decimal("0.0001")), original_amount.quantize(Decimal("0.0001")))
-
-    def test_convert_invalid_to_currency_code_raises_does_not_exist(self):
-        with self.assertRaises(Currency.DoesNotExist):
-            self.usd.convert(to_currency="XXX", amount=Decimal("100.00"))
-
-    def test_save_first_currency_becomes_base(self):
-        Currency.objects.all().delete()  # Ensure no currencies exist
-        eur = Currency.objects.create(code="EUR", name="Euro")
-        self.assertTrue(eur.is_base_currency)
-
-    def test_save_new_currency_when_base_exists(self):
-        # self.usd is already base
-        chf = Currency.objects.create(code="CHF", name="Swiss Franc")
-        self.assertFalse(chf.is_base_currency)
-        self.assertTrue(Currency.objects.get(code="USD").is_base_currency)
-
-    def test_save_change_base_currency(self):
-        self.assertTrue(self.usd.is_base_currency)
-        self.assertFalse(self.eur.is_base_currency)
-
+    def test_only_one_base_currency(self):
         self.eur.is_base_currency = True
         self.eur.save()
 
-        self.assertTrue(Currency.objects.get(code="EUR").is_base_currency)
-        self.assertFalse(Currency.objects.get(code="USD").is_base_currency)
+        self.usd.refresh_from_db()
+        self.eur.refresh_from_db()
 
-    def test_save_existing_base_currency(self):
-        self.assertTrue(self.usd.is_base_currency)
-        self.usd.name = "US Dollar Updated"
-        self.usd.save()
+        self.assertTrue(self.eur.is_base_currency)
+        self.assertFalse(self.usd.is_base_currency)
 
-        self.assertTrue(Currency.objects.get(code="USD").is_base_currency)
-        # Ensure other currencies are still not base
-        self.assertFalse(Currency.objects.get(code="EUR").is_base_currency)
+    def test_save_sets_base_if_none_exists(self):
+        Currency.objects.update(is_base_currency=False)
+        self.assertEqual(Currency.objects.filter(is_base_currency=True).count(), 0)
 
-    def test_save_cannot_unset_last_base_currency(self):
-        # Ensure only USD is base
-        Currency.objects.exclude(pk=self.usd.pk).update(is_base_currency=False)
-        self.usd.is_base_currency = True  # Make sure it's explicitly set before save
-        self.usd.save()
-        self.assertTrue(Currency.objects.get(pk=self.usd.pk).is_base_currency)
+        self.gbp.refresh_from_db()
+        self.gbp.save()
+        self.assertTrue(self.gbp.is_base_currency)
 
-        # Try to save it as not base
-        self.usd.is_base_currency = False
-        self.usd.save()
-        # It should remain base because it's the only one (or would be the only candidate if others existed but were false)
-        self.assertTrue(Currency.objects.get(pk=self.usd.pk).is_base_currency)
+    def test_delete_base_promotes_another(self):
+        self.usd.delete()
+        self.eur.refresh_from_db()
+        self.gbp.refresh_from_db()
 
-    def test_save_non_base_currency_remains_non_base(self):
-        self.assertFalse(self.eur.is_base_currency)
-        self.eur.name = "Euro Updated"
-        self.eur.save()
-        self.assertFalse(Currency.objects.get(code="EUR").is_base_currency)
-        self.assertTrue(Currency.objects.get(code="USD").is_base_currency)  # Original base remains
+        self.assertTrue(self.eur.is_base_currency or self.gbp.is_base_currency)
 
 
-class ConversionRateModelTests(TestCase):
+class ConversionPathTests(TestCase):
     def setUp(self):
-        self.usd = Currency.objects.create(code="USD", name="US Dollar")
-        self.eur = Currency.objects.create(code="EUR", name="Euro")
-        self.date = timezone.now().date()
-        self.rate = ConversionRate.objects.create(from_currency=self.usd, to_currency=self.eur, factor=Decimal("0.9000"), date=self.date)
+        # Create base currencies
+        self.usd = Currency.objects.create(code="USD")
+        self.eur = Currency.objects.create(code="EUR")
+        self.gbp = Currency.objects.create(code="GBP")
+        self.cad = Currency.objects.create(code="CAD")
+        self.inr = Currency.objects.create(code="INR")
+        self.cny = Currency.objects.create(code="CNY")
+        self.jpy = Currency.objects.create(code="JPY")
+        self.krw = Currency.objects.create(code="KRW")
+        self.aud = Currency.objects.create(code="AUD")
+        self.zzz = Currency.objects.create(code="ZZZ")  # Disconnected
 
-    def test_conversion_rate_str(self):
-        expected_str = f"USD:EUR 0.9000 ({self.date.isoformat()})"
-        self.assertEqual(str(self.rate), expected_str)
+        # Define conversions (some one-way, some requiring reversal)
+        ConversionFactor.objects.create(from_currency=self.eur, to_currency=self.usd, factor=1.2, date=timezone.now())
+        ConversionFactor.objects.create(from_currency=self.gbp, to_currency=self.eur, factor=1.1, date=timezone.now())
+        ConversionFactor.objects.create(from_currency=self.usd, to_currency=self.cad, factor=1.25, date=timezone.now())
+        ConversionFactor.objects.create(from_currency=self.cad, to_currency=self.eur, factor=0.9, date=timezone.now())
+        ConversionFactor.objects.create(from_currency=self.eur, to_currency=self.inr, factor=88, date=timezone.now())
+        ConversionFactor.objects.create(from_currency=self.inr, to_currency=self.cny, factor=0.12, date=timezone.now())
+        ConversionFactor.objects.create(from_currency=self.cny, to_currency=self.jpy, factor=17, date=timezone.now())
+        ConversionFactor.objects.create(from_currency=self.jpy, to_currency=self.krw, factor=10, date=timezone.now())
+        ConversionFactor.objects.create(from_currency=self.krw, to_currency=self.aud, factor=0.95, date=timezone.now())
+
+    def test_with_string(self):
+        path, factor, amount = self.eur.convert_to("USD")
+        self.assertEqual(path, [self.eur, self.usd])
+        self.assertAlmostEqual(factor, Decimal(1.2))
+        self.assertAlmostEqual(amount, Decimal(1.2))
+
+    def test_with_invalid_string(self):
+        path, factor, amount = self.eur.convert_to("XYZ")
+        self.assertIsNone(path)
+        self.assertIsNone(factor)
+        self.assertAlmostEqual(amount, Decimal(1))
+
+    def test_direct_conversion(self):
+        path, factor, amount = self.eur.convert_to(self.usd)
+        self.assertEqual(path, [self.eur, self.usd])
+        self.assertAlmostEqual(factor, Decimal(1.2))
+        self.assertAlmostEqual(amount, Decimal(1.2))
+
+    def test_reversed_conversion(self):
+        path, factor, amount = self.usd.convert_to(self.eur)
+        self.assertEqual(path, [self.usd, self.eur])
+        self.assertAlmostEqual(factor, Decimal(1 / 1.2))
+        self.assertAlmostEqual(amount, Decimal(1 / 1.2))
+
+    def test_direct_conversion_with_amount(self):
+        path, factor, amount = self.eur.convert_to(self.usd, amount=12)
+        self.assertEqual(path, [self.eur, self.usd])
+        self.assertAlmostEqual(factor, Decimal(1.2))
+        self.assertAlmostEqual(amount, Decimal(12 * 1.2))
+
+    def test_reversed_conversion_with_amount(self):
+        path, factor, amount = self.usd.convert_to(self.eur, amount=12)
+        self.assertEqual(path, [self.usd, self.eur])
+        self.assertAlmostEqual(factor, Decimal(1 / 1.2))
+        self.assertAlmostEqual(amount, Decimal(12 * 1 / 1.2))
+
+    def test_indirect_path(self):
+        path, factor, amount = self.gbp.convert_to(self.usd)
+        self.assertEqual(path, [self.gbp, self.eur, self.usd])
+        self.assertAlmostEqual(factor, Decimal(1.1 * 1.2))
+        self.assertAlmostEqual(amount, Decimal(1.1 * 1.2))
+
+    def test_reversed_indirect_path(self):
+        path, factor, amount = self.usd.convert_to(self.gbp)
+        self.assertEqual(path, [self.usd, self.eur, self.gbp])
+        self.assertAlmostEqual(factor, Decimal((1 / 1.2) * (1 / 1.1)))
+        self.assertAlmostEqual(amount, Decimal((1 / 1.2) * (1 / 1.1)))
+
+    def test_long_conversion_chain(self):
+        path, factor, amount = self.usd.convert_to(self.aud)
+        expected_path = [self.usd, self.eur, self.inr, self.cny, self.jpy, self.krw, self.aud]
+        self.assertEqual(path, expected_path)
+        expected_factor = Decimal(1 / 1.2 * 88 * 0.12 * 17 * 10 * 0.95)
+        self.assertAlmostEqual(factor, expected_factor, places=4)
+        self.assertAlmostEqual(amount, expected_factor, places=4)
+
+    def test_path_not_found(self):
+        path, factor, amount = self.usd.convert_to(self.zzz)
+        self.assertIsNone(path)
+        self.assertIsNone(factor)
+        self.assertAlmostEqual(amount, Decimal(1))
+
+    def test_cycle_resilience(self):
+        # Create a loop (EUR → USD already exists)
+        ConversionFactor.objects.create(from_currency=self.jpy, to_currency=self.usd, factor=0.009, date=timezone.now())
+
+        # Validate that the loop doesn’t affect correct output
+        path, factor, amount = self.usd.convert_to(self.jpy)
+        expected_path = [self.usd, self.jpy]
+        self.assertEqual(path, expected_path)
 
 
-class ConversionRateSignalTests(TestCase):
+class ConversionFactorModelTest(TestCase):
     def setUp(self):
-        self.usd = Currency.objects.create(code="USD", name="US Dollar")
-        self.eur = Currency.objects.create(code="EUR", name="Euro")
-        self.date = timezone.now().date()
+        self.usd = Currency.objects.create(code="USD", name="US Dollar", symbol="$", is_base_currency=True)
+        self.eur = Currency.objects.create(code="EUR", name="Euro", symbol="€")
+        self.eur_to_usd = ConversionFactor.objects.create(from_currency=self.eur, to_currency=self.usd, factor=1, date=timezone.now())
 
-    def test_reverse_rate_created_on_new_save(self):
-        ConversionRate.objects.create(from_currency=self.usd, to_currency=self.eur, factor=Decimal("0.9"), date=self.date)
-        self.assertTrue(ConversionRate.objects.filter(from_currency=self.eur, to_currency=self.usd, factor=Decimal("1.0") / Decimal("0.9"), date=self.date).exists())
+    def test_str(self):
+        self.assertEqual(str(self.eur_to_usd), f"EUR:USD 1 ({timezone.now().date().isoformat()})")
 
-    def test_reverse_rate_deleted_on_delete(self):
-        rate = ConversionRate.objects.create(from_currency=self.usd, to_currency=self.eur, factor=Decimal("0.9"), date=self.date)
-        # The reverse rate should have been created by the post_save signal
-        self.assertTrue(ConversionRate.objects.filter(from_currency=self.eur, to_currency=self.usd, date=self.date).exists())
-        rate.delete()
-        self.assertFalse(ConversionRate.objects.filter(from_currency=self.eur, to_currency=self.usd, date=self.date).exists())
-
-    def test_update_existing_reverse_rate_factor_on_original_change(self):
-        rate = ConversionRate.objects.create(from_currency=self.usd, to_currency=self.eur, factor=Decimal("0.9"), date=self.date)
-        # Reverse rate EUR->USD with factor 1/0.9 should exist
-
-        rate.factor = Decimal("0.8")
-        rate.save()
-
-        reverse_rate = ConversionRate.objects.get(from_currency=self.eur, to_currency=self.usd, date=self.date)
-        self.assertEqual(reverse_rate.factor, (Decimal("1.0") / Decimal("0.8")).quantize(Decimal("0.0001")))
-
-    def test_reverse_rate_factor_is_zero_if_original_factor_is_zero_on_create(self):
-        ConversionRate.objects.create(from_currency=self.usd, to_currency=self.eur, factor=Decimal("0.0"), date=self.date)
-        self.assertTrue(ConversionRate.objects.filter(from_currency=self.eur, to_currency=self.usd, factor=Decimal("0.0"), date=self.date).exists())
-        reverse_rate = ConversionRate.objects.get(from_currency=self.eur, to_currency=self.usd, date=self.date)
-        self.assertEqual(reverse_rate.factor, Decimal("0.0"))
-
-    def test_reverse_rate_factor_is_zero_if_original_factor_is_zero_on_update(self):
-        # Create initial rate with non-zero factor
-        rate = ConversionRate.objects.create(from_currency=self.usd, to_currency=self.eur, factor=Decimal("0.9"), date=self.date)
-        # Reverse rate should exist with reciprocal factor
-        self.assertTrue(ConversionRate.objects.filter(from_currency=self.eur, to_currency=self.usd, date=self.date).exists())
-
-        # Update original rate's factor to zero
-        rate.factor = Decimal("0.0")
-        rate.save()
-
-        # Reverse rate's factor should now be zero
-        reverse_rate = ConversionRate.objects.get(from_currency=self.eur, to_currency=self.usd, date=self.date)
-        self.assertEqual(reverse_rate.factor, Decimal("0.0"))
-
-    def test_signal_idempotency_if_reverse_rate_with_correct_factor_exists(self):
-        # Create the initial rate, which triggers the signal to create the reverse
-        ConversionRate.objects.create(from_currency=self.usd, to_currency=self.eur, factor=Decimal("0.9"), date=self.date)
-        initial_reverse_rate = ConversionRate.objects.get(from_currency=self.eur, to_currency=self.usd, date=self.date)
-        self.assertEqual(initial_reverse_rate.factor, (Decimal("1.0") / Decimal("0.9")).quantize(Decimal("0.0001")))
-
-        # Save the original rate again (or a new one with identical values). Signal should not modify the existing correct reverse rate.
-        ConversionRate.objects.create(from_currency=self.usd, to_currency=self.eur, factor=Decimal("0.9"), date=self.date)
-        self.assertEqual(ConversionRate.objects.filter(from_currency=self.eur, to_currency=self.usd, date=self.date).count(), 1)  # Still only one reverse rate
-        final_reverse_rate = ConversionRate.objects.get(from_currency=self.eur, to_currency=self.usd, date=self.date)
-        self.assertEqual(final_reverse_rate.pk, initial_reverse_rate.pk)  # Ensure it's the same object
-        self.assertEqual(final_reverse_rate.factor, (Decimal("1.0") / Decimal("0.9")).quantize(Decimal("0.0001")))  # Factor remains correct
+    def test_save_no_date(self):
+        usd_to_eur = ConversionFactor.objects.create(from_currency=self.usd, to_currency=self.eur, factor=1)
+        self.assertEqual(usd_to_eur.date.date(), timezone.now().date())
